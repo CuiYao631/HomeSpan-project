@@ -10,8 +10,8 @@
  *
  * 引脚定义:
  * - GPIO4: 灯光控制 (低电平触发开启)
- * - GPIO0: 物理开关按钮
- * - GPIO32: LED指示灯 (低电平点亮)
+ * - GPIO0: 物理开关按钮 (短按开关/长按重置)
+ * - GPIO32: HomeKit状态LED (显示连接状态)
  *
  * 支持特性:
  * - On: 灯光开关状态
@@ -27,11 +27,17 @@
 
 #include "HomeSpan.h"
 #include <Arduino.h>
+#include <EasyButton.h>
 
 // 硬件引脚定义
 #define LIGHT_CONTROL_PIN  4    // 灯光控制引脚 (低电平触发开启)
 #define PHYSICAL_SWITCH    0    // 物理开关按钮引脚
 #define LED_INDICATOR      32   // LED指示灯引脚 (低电平点亮)
+#define DEFAULT_SETUP_CODE "46637726"  // HomeKit默认配对码
+#define DEFAULT_QR_ID      "DENG"      // HomeKit QR码ID 
+
+const int duration = 5000;                  // Button长按触发时间
+EasyButton button(PHYSICAL_SWITCH);         // 使用GPIO0初始化按钮
 
 // 智能灯服务类
 struct DEV_SmartLight : Service::LightBulb {
@@ -39,22 +45,17 @@ struct DEV_SmartLight : Service::LightBulb {
   Characteristic::Name name{"智能灯"};
   
   bool currentState;              // 当前灯光状态
-  bool lastButtonState;           // 上次按钮状态
-  uint32_t lastButtonTime;        // 上次按钮按下时间
   
   DEV_SmartLight() : Service::LightBulb() {
     currentState = false;
-    lastButtonState = true;  // 按钮上拉，未按下时为高电平
-    lastButtonTime = 0;
     
-    // 初始化硬件引脚
+    // 初始化灯光控制引脚
     pinMode(LIGHT_CONTROL_PIN, OUTPUT);
-    pinMode(PHYSICAL_SWITCH, INPUT_PULLUP);
-    pinMode(LED_INDICATOR, OUTPUT);
     
-    // 设置初始状态 (关闭)
-    digitalWrite(LIGHT_CONTROL_PIN, HIGH);  // 高电平关闭灯光
-    digitalWrite(LED_INDICATOR, HIGH);      // 高电平熄灭LED指示灯
+    // 设置初始状态 (关闭) - 高电平关闭，低电平开启
+    digitalWrite(LIGHT_CONTROL_PIN, HIGH);
+    
+    Serial.println("⚙️  智能灯服务初始化完成");
   }
   
   boolean update() override {
@@ -66,7 +67,7 @@ struct DEV_SmartLight : Service::LightBulb {
   }
   
   void loop() override {
-    checkPhysicalSwitch();
+    // EasyButton的处理在主loop中进行
   }
   
   // 更新硬件状态
@@ -74,22 +75,9 @@ struct DEV_SmartLight : Service::LightBulb {
     // 控制灯光 (低电平触发开启)
     digitalWrite(LIGHT_CONTROL_PIN, currentState ? LOW : HIGH);
     
-    // 控制LED指示灯 (低电平点亮)
+    // LED指示灯由HomeSpan管理，显示HomeKit连接状态
+    // 如需要显示灯光状态，可启用下面代码:
     digitalWrite(LED_INDICATOR, currentState ? LOW : HIGH);
-  }
-  
-  // 检查物理开关
-  void checkPhysicalSwitch() {
-    uint32_t currentTime = millis();
-    bool buttonState = digitalRead(PHYSICAL_SWITCH);
-    
-    // 检测按钮按下 (下降沿) 并防抖
-    if (!buttonState && lastButtonState && (currentTime - lastButtonTime > 200)) {
-      lastButtonTime = currentTime;
-      toggleLight();
-    }
-    
-    lastButtonState = buttonState;
   }
   
   // 切换灯光状态
@@ -97,15 +85,47 @@ struct DEV_SmartLight : Service::LightBulb {
     currentState = !currentState;
     lightOn.setVal(currentState ? 1 : 0);
     updateHardware();
+    Serial.printf("💡 灯光状态: %s\n", currentState ? "开启" : "关闭");
   }
 };
 
+// 全局指针，用于在回调函数中访问设备
+DEV_SmartLight* smartLight;
+
+// 按钮短按回调函数
+void onPressed() {
+  Serial.println("🔎 按钮短按检测到");
+  if (smartLight) {
+    smartLight->toggleLight();
+  }
+}
+
+// 按钮长按回调函数
+void onPressedForDuration() {
+  Serial.println("🔄 按钮长按检测到 - 恢复出厂设置");
+  // 恢复出厂设置
+  homeSpan.processSerialCommand("F");
+}
+
 void setup() {
   Serial.begin(115200);
+
+  // 初始化EasyButton
+  button.begin();
+  button.onPressed(onPressed);                         // 定义按键单按事件回调
+  button.onPressedFor(duration, onPressedForDuration); // 定义按键长按事件回调
   
+  // 配置HomeSpan
+  homeSpan.setStatusPin(LED_INDICATOR);              // 状态LED
+  homeSpan.setQRID(DEFAULT_QR_ID);                   // QR码ID
+  homeSpan.setPairingCode(DEFAULT_SETUP_CODE);       // 默认配对码
+
+
+
   // 初始化HomeSpan
   homeSpan.begin(Category::Lighting, "HomeKit智能灯");
   homeSpan.enableAutoStartAP();
+
   
   // 创建配件
   new SpanAccessory();
@@ -120,9 +140,11 @@ void setup() {
   new Characteristic::Identify();
   
   // 添加智能灯服务
-  new DEV_SmartLight();
+  smartLight = new DEV_SmartLight();
+
 }
 
 void loop() {
   homeSpan.poll();
+  button.read();  // 读取按钮状态
 }
