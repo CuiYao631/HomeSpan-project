@@ -48,6 +48,9 @@
 #define MIN_SPEED_THRESHOLD   15      // 最小运行速度阈值 (%)
 #define SWING_RANGE           90      // 摆动角度范围 (度)
 
+#define DEFAULT_SETUP_CODE "12365478"  // HomeKit默认配对码
+#define DEFAULT_QR_ID      "FENG"      // HomeKit QR码ID
+
 // 智能风扇服务类
 struct DEV_SmartFan : Service::Fan {
   
@@ -488,6 +491,9 @@ void setup() {
   Serial.begin(115200);
   Serial.println("\n🌀 HomeKit 智能风扇启动中...");
   
+
+  homeSpan.setQRID(DEFAULT_QR_ID);                   // QR码ID
+  homeSpan.setPairingCode(DEFAULT_SETUP_CODE);       // 默认配对码
   // 初始化HomeSpan
   homeSpan.begin(Category::Fans, "HomeKit智能风扇");
   homeSpan.enableAutoStartAP();

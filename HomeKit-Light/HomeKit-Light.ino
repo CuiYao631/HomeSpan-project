@@ -28,13 +28,15 @@
 #include "HomeSpan.h"
 #include <Arduino.h>
 #include <EasyButton.h>
+#include <WiFi.h>
 
 // 硬件引脚定义
 #define LIGHT_CONTROL_PIN  4    // 灯光控制引脚 (低电平触发开启)
 #define PHYSICAL_SWITCH    0    // 物理开关按钮引脚
 #define LED_INDICATOR      32   // LED指示灯引脚 (低电平点亮)
 #define DEFAULT_SETUP_CODE "46637726"  // HomeKit默认配对码
-#define DEFAULT_QR_ID      "DENG"      // HomeKit QR码ID 
+#define DEFAULT_QR_ID      "DENG"      // HomeKit QR码ID
+#define DEVICE_HOSTNAME    "MySmartLight" // 设备主机名 
 
 const int duration = 5000;                  // Button长按触发时间
 EasyButton button(PHYSICAL_SWITCH);         // 使用GPIO0初始化按钮
@@ -109,6 +111,10 @@ void onPressedForDuration() {
 
 void setup() {
   Serial.begin(115200);
+  
+  // 设置自定义主机名
+  WiFi.setHostname(DEVICE_HOSTNAME);
+  Serial.printf("📡 设备主机名设置为: %s\n", DEVICE_HOSTNAME);
 
   // 初始化EasyButton
   button.begin();
