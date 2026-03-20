@@ -29,21 +29,54 @@
 #define LED_INDICATOR        2    // 状态LED引脚 (可选)
 #define BUZZER_PIN           4    // 蜂鸣器引脚 (可选)
 #define DEFAULT_SETUP_CODE   "46637726"  // HomeKit默认配对码
-#define DEFAULT_QR_ID        "BELL"       // HomeKit QR码ID
+#define DOORBELL_QR_ID       "BELL"       // HomeKit QR码ID
 #define DEVICE_HOSTNAME      "MyDoorbell" // 设备主机名
 
 // 门铃配置
 const int buzzerDuration = 1000;        // 蜂鸣器响铃时长(ms)
 const int buttonDebounce = 50;          // 按钮防抖时间(ms)
 
+// WiFi重配网配置
+#define WIFI_RECONNECT_TIMEOUT  60000   // WiFi连接失败超时(ms)，超时后自动启动AP重配网
+
+unsigned long wifiConnectingStart = 0;  // 开始连接WiFi的时间戳
+bool wifiConnecting = false;            // 是否处于WiFi连接中状态
+
+// HomeSpan状态变化回调 —— 监控WiFi连接状态
+void onSpanStatus(HS_STATUS status) {
+  switch (status) {
+    case HS_WIFI_NEEDED:
+      Serial.println("📶 未找到WiFi凭据，即将启动AP配网...");
+      wifiConnecting = false;
+      break;
+    case HS_WIFI_CONNECTING:
+      if (!wifiConnecting) {
+        wifiConnecting = true;
+        wifiConnectingStart = millis();
+        Serial.println("📶 正在连接WiFi...");
+      }
+      break;
+    case HS_PAIRING_NEEDED:
+      wifiConnecting = false;
+      Serial.println("✅ WiFi已连接，等待HomeKit配对");
+      break;
+    case HS_PAIRED:
+      wifiConnecting = false;
+      Serial.println("✅ WiFi已连接，HomeKit已配对");
+      break;
+    default:
+      break;
+  }
+}
+
 EasyButton button(DOORBELL_BUTTON_PIN);
 
 // 门铃服务类
-struct DEV_Doorbell : Service::StatelessProgrammableSwitch {
+struct DEV_Doorbell : Service::Doorbell {
   Characteristic::ProgrammableSwitchEvent event;
   Characteristic::Name name{"门铃"};
 
-  DEV_Doorbell() : Service::StatelessProgrammableSwitch() {
+  DEV_Doorbell() : Service::Doorbell() {
     Serial.println("⚙️  门铃服务初始化完成");
   }
 
@@ -73,13 +106,33 @@ void onPressed() {
     doorbell->ring();
     
     // 检查HomeSpan连接状态
-    if (homeSpan.isConnected()) {
+    if (WiFi.isConnected()) {
       Serial.println("✅ HomeKit连接正常，通知已发送");
     } else {
       Serial.println("⚠️ HomeKit未连接，请检查网络和配对状态");
     }
   } else {
     Serial.println("❌ 门铃服务未初始化");
+  }
+}
+
+// 串口指令处理：输入 U 或 UNPAIR 清除 HomeKit 配对信息
+void handleSerialCommand() {
+  if (!Serial.available()) {
+    return;
+  }
+
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  cmd.toUpperCase();
+
+  if (cmd == "U" || cmd == "UNPAIR") {
+    Serial.println("🗑️ 收到指令，正在清除 HomeKit 配对信息...");
+    homeSpan.processSerialCommand("U");
+    Serial.println("✅ 配对信息已清除，请在家庭 App 中重新配对");
+  } else if (cmd.length() > 0) {
+    Serial.printf("ℹ️ 未知指令: %s\n", cmd.c_str());
+    Serial.println("可用指令: U 或 UNPAIR");
   }
 }
 
@@ -105,16 +158,17 @@ void setup() {
 
   // 配置HomeSpan
   homeSpan.setStatusPin(LED_INDICATOR);              // 状态LED
-  homeSpan.setQRID(DEFAULT_QR_ID);                   // QR码ID
+  homeSpan.setQRID(DOORBELL_QR_ID);                  // QR码ID
   homeSpan.setPairingCode(DEFAULT_SETUP_CODE);       // 默认配对码
+  homeSpan.setStatusCallback(onSpanStatus);          // WiFi状态监控回调
 
   // 初始化HomeSpan
-  homeSpan.begin(Category::ProgrammableSwitches, "HomeKit智能门铃");
+  homeSpan.begin(Category::VideoDoorbells, "HomeKit智能门铃");
   homeSpan.enableAutoStartAP();
   
   Serial.println("⚙️  HomeSpan配置完成");
   Serial.printf("🔐 配对码: %s\n", DEFAULT_SETUP_CODE);
-  Serial.printf("📱 QR码ID: %s\n", DEFAULT_QR_ID);
+  Serial.printf("📱 QR码ID: %s\n", DOORBELL_QR_ID);
 
   // 创建配件
   new SpanAccessory();
@@ -136,9 +190,18 @@ void setup() {
   Serial.println("🔔 按下门铃按钮测试功能");
   Serial.println("📲 确保 iPhone 允许家庭App发送通知");
   Serial.println("⚙️  设置 > 通知 > 家庭 > 允许通知");
+  Serial.println("⌨️ 串口输入 U 或 UNPAIR 可清除 HomeKit 配对信息");
 }
 
 void loop() {
   homeSpan.poll();    // 处理HomeKit通信
   button.read();      // 读取按钮状态
+  // handleSerialCommand();  // 处理串口指令
+
+  // // WiFi连接超时检测：超时后启动AP进行重配网
+  // if (wifiConnecting && (millis() - wifiConnectingStart > WIFI_RECONNECT_TIMEOUT)) {
+  //   wifiConnecting = false;
+  //   Serial.println("⚠️ WiFi连接超时，启动AP配网模式，请连接 ESP32-AP 热点重新配置网络");
+  //   homeSpan.processSerialCommand("A");  // 启动Access Point配网
+  // }
 }
